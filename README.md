@@ -1,70 +1,123 @@
 # フリカレ監視BOT
 
-フリーカレンダー（フリカレ）のスケジュールを監視し、変更をDiscordに通知するBOTです。
+フリーカレンダー（フリカレ）の公開スケジュールを取得し、Discord通知やChatGPTでの予定整理に利用するプロジェクトです。
 
-## 🚀 クイックスタート
+## 新しい取得コア
 
-### 1. 必要な環境
+従来のDiscord BOT内に直接組み込まれていた取得処理を、再利用可能な `freecal_core.py` として分離しています。
+
+主な改善点:
+
+- Discord表示処理とWeb取得処理を分離
+- 固定3秒待機ではなく、ページ読込とDOM安定を確認して待機
+- ChromeDriverはSelenium Managerに任せ、新コアでは `webdriver-manager` を不要化
+- `230522` / `mem230522` / 公開URLを同じ入力として扱える
+- `_dateYYYYMM` の月指定URLへ直接アクセス
+- 日付・時刻・予定名を構造化データとして返す
+- 月指定、開始日・終了日指定に対応
+- 重複予定を除去
+- JSON CLIを用意
+- ChatGPT Skill用の `skills/freecal/SKILL.md` を追加
+
+### JSONで予定を取得
+
+```bash
+python freecal_cli.py 230522 --month 2026-08 --pretty
+```
+
+公開URLをそのまま渡すこともできます。
+
+```bash
+python freecal_cli.py https://freecalend.com/open/mem230522 --month 2026-08 --pretty
+```
+
+期間指定では、開始日は含み、終了日は含みません。
+
+```bash
+python freecal_cli.py 230522 \
+  --start 2026-08-17 \
+  --end 2026-09-01 \
+  --pretty
+```
+
+出力例:
+
+```json
+{
+  "user_id": "230522",
+  "source_url": "https://freecalend.com/open/mem230522_date202608",
+  "event_count": 1,
+  "events": [
+    {
+      "date": "2026-08-17",
+      "title": "予定名",
+      "time": "21:00",
+      "user_id": "230522",
+      "all_day": false
+    }
+  ]
+}
+```
+
+### テスト
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+## Discord BOT
+
+### 必要な環境
 
 - Python 3.11以上
 - Google Chrome（最新版）
 - Discord BOTトークン
 
-### 2. インストール
+### インストール
 
 ```bash
-# リポジトリのクローンまたはファイルをダウンロード
 git clone [repository_url]
 cd freecal_bot
 
-# 仮想環境の作成（推奨）
 python -m venv venv
 
-# 仮想環境の有効化
-# Windows:
+# Windows
 venv\Scripts\activate
-# Mac/Linux:
+
+# Mac/Linux
 source venv/bin/activate
 
-# 依存ライブラリのインストール
 pip install -r requirements.txt
 ```
 
-### 3. 設定
+### 設定
 
-1. `config.py` を編集
-   ```python
-   DISCORD_BOT_TOKEN = "あなたのBOTトークン"
-   ```
+`config.py` を編集します。
 
-2. または環境変数を使用（推奨）
-   ```bash
-   cp .env.example .env
-   # .env ファイルを編集してトークンを設定
-   ```
+```python
+DISCORD_BOT_TOKEN = "あなたのBOTトークン"
+```
 
-### 4. BOTの起動
+環境変数を使用する場合は `.env` を利用してください。
+
+### BOTの起動
 
 ```bash
 python bot.py
 ```
 
-### 5. Discord上での初期設定
+### Discord上での初期設定
 
-1. BOTを起動
-2. 通知チャンネルを設定
-   ```
-   !setchannel #通知チャンネル
-   ```
-3. 監視ユーザーを追加
-   ```
-   !adduser 123456 ユーザー名
-   ```
+```text
+!setchannel #通知チャンネル
+!adduser 123456 ユーザー名
+```
 
-## 📝 コマンド一覧
+## コマンド一覧
 
 | コマンド | 説明 |
-|---------|------|
+|---|---|
 | `!check` | 監視ユーザー一覧 |
 | `!check [名前]` | 今日の予定を確認 |
 | `!calendar [名前]` | 今後の全予定を表示 |
@@ -73,53 +126,64 @@ python bot.py
 | `!removeuser` | ユーザー削除（管理者のみ） |
 | `!setchannel` | 通知チャンネル設定（管理者のみ） |
 
-## 🔧 トラブルシューティング
+## ファイル構成
 
-### BOTが起動しない
-- Pythonバージョンを確認: `python --version`
-- トークンが正しく設定されているか確認
-- 依存ライブラリがインストールされているか確認
+```text
+freecal_bot/
+├── bot.py                       # 既存Discord BOT
+├── freecal_core.py              # 再利用可能な取得・解析コア
+├── freecal_cli.py               # JSON CLI
+├── config.py                    # Discord設定
+├── requirements.txt             # 実行依存ライブラリ
+├── requirements-dev.txt         # テスト依存ライブラリ
+├── tests/
+│   └── test_freecal_core.py     # 解析・期間指定テスト
+├── skills/
+│   └── freecal/
+│       └── SKILL.md             # ChatGPT Skill
+├── users.json                   # ユーザー情報（自動生成）
+├── previous_data.json           # 前回データ（自動生成）
+└── screenshots/                 # 既存BOTのデバッグ画像
+```
+
+## ChatGPT Skill
+
+`skills/freecal/SKILL.md` は、公開フリカレを取得して次の処理を行うためのワークフローを定義しています。
+
+- 月間予定を表にする
+- 指定期間の予定を抽出する
+- 公開予定がない日を確認する
+- 複数人の公開予定を比較する
+
+予定が公開されていない日を、本人が必ず空いている日とは扱いません。
+
+## トラブルシューティング
+
+### BOTまたはCLIが起動しない
+
+- `python --version` を確認
+- Google Chromeが利用できることを確認
+- `pip install -r requirements.txt` を再実行
 
 ### スケジュールが取得できない
-- Chromeが最新版か確認
-- `screenshots/` フォルダのスクリーンショットを確認
+
+- 公開フリカレURLをブラウザで直接開けるか確認
 - ユーザーIDが正しいか確認
+- フリカレ側のDOM構造が変更されていないか確認
+- 既存Discord BOTでは `screenshots/` のデバッグ画像も確認
 
-## 📄 ファイル構成
+## セキュリティ
 
-```
-freecal_bot/
-├── bot.py              # メインプログラム
-├── config.py           # 設定ファイル
-├── requirements.txt    # 依存ライブラリ
-├── .gitignore         # Git除外設定
-├── .env.example       # 環境変数例
-├── README.md          # このファイル
-├── users.json         # ユーザー情報（自動生成）
-├── previous_data.json # 前回データ（自動生成）
-├── bot.log           # ログ（自動生成）
-└── screenshots/       # デバッグ画像（自動生成）
-```
+- Discord BOTトークンをGitへコミットしない
+- 非公開カレンダーや認証が必要な情報の取得には使用しない
+- Skillでは公開URLまたは公開ユーザーIDのみを対象にする
 
-## 🔒 セキュリティ
-
-- `config.py` をGitにコミットしない
-- BOTトークンを公開しない
-- 定期的にトークンを更新
-
-## 📖 詳細なドキュメント
+## 詳細ドキュメント
 
 - [利用ガイド](user_guide.md)
 - [管理者ガイド](admin_guide.md)
 - [開発ナレッジ](dev_knowledge.md)
 
-## 📞 サポート
-
-問題が発生した場合は、以下を確認してください：
-1. `bot.log` のエラーメッセージ
-2. `screenshots/` のデバッグ画像
-3. ドキュメントのトラブルシューティング
-
 ---
 
-Version 7.0.0 - 2025年6月23日
+Version 8.0 development branch
