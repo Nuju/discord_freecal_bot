@@ -17,7 +17,7 @@ FREECAL_BASE_URL = "https://freecalend.com/open"
 _CCE_ID_RE = re.compile(
     r"^ccexp-(?:(?P<user_id>\d+)-)?(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})(?:-(?P<seq>\d+))?$"
 )
-_TIME_RE = re.compile(r"^(?P<time>\d{1,2}:\d{2})\s*(?P<title>.+)$", re.DOTALL)
+_TIME_TOKEN_RE = re.compile(r"(?<!\d)(?P<time>\d{1,2}:[0-5]\d)(?!\d)")
 
 
 class FreecalError(RuntimeError):
@@ -64,7 +64,7 @@ class FreecalResult:
 
 
 def normalize_user_id(value: str) -> str:
-    """Accept `230522`, `mem230522`, or a public Freecal URL and return `230522`."""
+    """Accept a numeric ID, memXXXXXX, or a public Freecal URL."""
     value = value.strip()
     match = re.search(r"(?:^|/)mem(?P<id>\d+)", value)
     if match:
@@ -76,7 +76,11 @@ def normalize_user_id(value: str) -> str:
     raise ValueError(f"Unsupported Freecal user identifier: {value!r}")
 
 
-def build_public_url(user_id: str, year: Optional[int] = None, month: Optional[int] = None) -> str:
+def build_public_url(
+    user_id: str,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+) -> str:
     user_id = normalize_user_id(user_id)
     if (year is None) != (month is None):
         raise ValueError("year and month must be specified together")
@@ -85,6 +89,57 @@ def build_public_url(user_id: str, year: Optional[int] = None, month: Optional[i
     if not 1 <= int(month) <= 12:
         raise ValueError("month must be between 1 and 12")
     return f"{FREECAL_BASE_URL}/mem{user_id}_date{int(year):04d}{int(month):02d}"
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
+
+
+def _is_supported_time(value: str) -> bool:
+    """Allow ordinary clock times plus late-night notation such as 24:00-29:59."""
+    try:
+        hour_text, minute_text = value.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except (TypeError, ValueError):
+        return False
+    return 0 <= hour <= 29 and 0 <= minute <= 59
+
+
+def split_event_text(text: str) -> list[tuple[Optional[str], str]]:
+    """Split one Freecal day-cell string into individual events.
+
+    Freecal can render multiple events for the same day inside one ccexp node,
+    for example ``13:00 A 21:00 B`` or ``休 21:00 C``.  The old parser treated
+    those as one event.  This function keeps an untimed prefix as an all-day
+    event and starts a new event at every supported HH:MM token.
+    """
+    text = _normalize_text(text)
+    if not text:
+        return []
+
+    matches = [
+        match
+        for match in _TIME_TOKEN_RE.finditer(text)
+        if _is_supported_time(match.group("time"))
+    ]
+    if not matches:
+        return [(None, text)]
+
+    parts: list[tuple[Optional[str], str]] = []
+    prefix = text[: matches[0].start()].strip(" -–—")
+    if prefix:
+        parts.append((None, prefix))
+
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        title = text[match.end() : end].strip(" -–—")
+        if title:
+            parts.append((match.group("time"), title))
+
+    # If a malformed time token consumed the whole text, preserve the source
+    # instead of silently dropping the event.
+    return parts or [(None, text)]
 
 
 def parse_events(html: str, *, expected_user_id: Optional[str] = None) -> list[FreecalEvent]:
@@ -113,34 +168,25 @@ def parse_events(html: str, *, expected_user_id: Optional[str] = None) -> list[F
         except ValueError:
             continue
 
-        text = " ".join(node.stripped_strings).strip()
-        text = re.sub(r"\s+", " ", text)
+        text = _normalize_text(" ".join(node.stripped_strings))
         if not text:
             continue
 
-        time_value: Optional[str] = None
-        title = text
-        time_match = _TIME_RE.match(text)
-        if time_match:
-            time_value = time_match.group("time")
-            title = time_match.group("title").strip()
-        if not title:
-            continue
-
-        key = (event_date, time_value, title)
-        if key in seen:
-            continue
-        seen.add(key)
-        events.append(
-            FreecalEvent(
-                date=event_date,
-                time=time_value,
-                title=title,
-                user_id=node_user_id or expected,
+        for time_value, title in split_event_text(text):
+            key = (event_date, time_value, title)
+            if key in seen:
+                continue
+            seen.add(key)
+            events.append(
+                FreecalEvent(
+                    date=event_date,
+                    time=time_value,
+                    title=title,
+                    user_id=node_user_id or expected,
+                )
             )
-        )
 
-    return sorted(events, key=lambda e: (e.date, e.time or "00:00", e.title))
+    return sorted(events, key=lambda event: (event.date, event.time or "00:00", event.title))
 
 
 def filter_events(
@@ -150,6 +196,8 @@ def filter_events(
     end: Optional[date] = None,
 ) -> list[FreecalEvent]:
     """Filter by an inclusive start and exclusive end date."""
+    if start is not None and end is not None and start >= end:
+        raise ValueError("start must be earlier than end")
     return [
         event
         for event in events
@@ -160,8 +208,8 @@ def filter_events(
 class FreecalScraper:
     """Reusable browser-backed scraper for public Freecal calendars.
 
-    A single Chrome session is reused across calls. Selenium Manager handles the
-    ChromeDriver automatically, so callers do not need webdriver-manager.
+    One Chrome session is reused across calls. Selenium Manager handles the
+    ChromeDriver automatically.
     """
 
     def __init__(
@@ -207,15 +255,20 @@ class FreecalScraper:
 
     @staticmethod
     def _page_ready(driver, year: Optional[int], month: Optional[int]) -> bool:
-        ready = driver.execute_script("return document.readyState") == "complete"
-        if not ready:
+        if driver.execute_script("return document.readyState") != "complete":
             return False
         if year is None or month is None:
             return True
         body = driver.find_element("tag name", "body").text
         return f"{year}年" in body and f"{month}月" in body
 
-    def _load_rendered_html(self, url: str, *, year: Optional[int], month: Optional[int]) -> str:
+    def _load_rendered_html(
+        self,
+        url: str,
+        *,
+        year: Optional[int],
+        month: Optional[int],
+    ) -> str:
         driver = self._ensure_driver()
         last_error: Optional[Exception] = None
 
@@ -223,13 +276,9 @@ class FreecalScraper:
             try:
                 driver.get(url)
                 WebDriverWait(driver, self.timeout, poll_frequency=0.2).until(
-                    lambda d: self._page_ready(d, year, month)
+                    lambda current_driver: self._page_ready(current_driver, year, month)
                 )
 
-                # Freecal renders asynchronously after document.readyState=complete.
-                # Require a short minimum observation window and then return as
-                # soon as the rendered DOM is stable. This also works for months
-                # that legitimately contain zero events.
                 observation_started = time.monotonic()
                 minimum_observation = min(0.8, max(0.3, self.timeout / 10))
                 deadline = observation_started + min(2.5, max(1.0, self.timeout / 3))
@@ -272,7 +321,11 @@ class FreecalScraper:
         events = parse_events(html, expected_user_id=normalized)
 
         if year is not None and month is not None:
-            events = [e for e in events if e.date.year == year and e.date.month == month]
+            events = [
+                event
+                for event in events
+                if event.date.year == year and event.date.month == month
+            ]
         events = filter_events(events, start=start, end=end)
 
         return FreecalResult(
