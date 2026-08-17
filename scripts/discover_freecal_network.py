@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from freecal_core import build_public_url, normalize_user_id
 
