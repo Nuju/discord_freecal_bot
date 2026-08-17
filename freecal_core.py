@@ -226,19 +226,29 @@ class FreecalScraper:
                     lambda d: self._page_ready(d, year, month)
                 )
 
-                # Give asynchronous calendar rendering a short grace period, but
-                # stop immediately once the DOM stops changing.
+                # Freecal renders asynchronously after document.readyState=complete.
+                # Require a short minimum observation window and then return as
+                # soon as the rendered DOM is stable. This also works for months
+                # that legitimately contain zero events.
+                observation_started = time.monotonic()
+                minimum_observation = min(0.8, max(0.3, self.timeout / 10))
+                deadline = observation_started + min(2.5, max(1.0, self.timeout / 3))
                 previous = None
                 stable_rounds = 0
-                deadline = time.monotonic() + min(2.0, self.timeout / 3)
-                while time.monotonic() < deadline and stable_rounds < 2:
+
+                while time.monotonic() < deadline:
                     current = driver.page_source
                     if current == previous:
                         stable_rounds += 1
                     else:
                         stable_rounds = 0
                         previous = current
+
+                    elapsed = time.monotonic() - observation_started
+                    if elapsed >= minimum_observation and stable_rounds >= 2:
+                        return current
                     time.sleep(0.15)
+
                 return driver.page_source
             except (TimeoutException, WebDriverException) as exc:
                 last_error = exc
