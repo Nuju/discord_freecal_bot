@@ -1,12 +1,6 @@
 name: freecal-live-validation
 
 on:
-  push:
-    branches:
-      - agent/freecal-live-validation
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
