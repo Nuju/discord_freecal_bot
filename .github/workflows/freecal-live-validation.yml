@@ -27,16 +27,52 @@ jobs:
       - name: Run unit tests
         run: python -m pytest -q
 
-      - name: Live fetch mem230522 August 2026
+      - name: Live fetch mem230522 August 2026 with Selenium
         run: |
           python freecal_cli.py 230522 --month 2026-08 --pretty | tee freecal_live.json
           python - <<'PY'
           import json
           with open('freecal_live.json', encoding='utf-8') as f:
               data = json.load(f)
-          print(f"event_count={data['event_count']}")
+          print(f"selenium_event_count={data['event_count']}")
           if data['event_count'] < 27:
-              raise SystemExit('Unexpectedly low event count')
+              raise SystemExit('Unexpectedly low Selenium event count')
+          PY
+
+      - name: Fetch the same month directly from open/data
+        run: |
+          python scripts/probe_freecal_direct.py 230522 --month 2026-08 --pretty | tee freecal_direct.json
+          python - <<'PY'
+          import json
+          with open('freecal_direct.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print(f"direct_event_count={data['event_count']}")
+          PY
+
+      - name: Compare direct and Selenium results
+        run: |
+          python - <<'PY'
+          import json
+
+          with open('freecal_live.json', encoding='utf-8') as f:
+              selenium_data = json.load(f)
+          with open('freecal_direct.json', encoding='utf-8') as f:
+              direct_data = json.load(f)
+
+          selenium_events = {
+              (e['date'], e.get('time'), e['title']) for e in selenium_data['events']
+          }
+          direct_events = {
+              (e['date'], e.get('time'), e['title']) for e in direct_data['events']
+          }
+
+          missing = sorted(selenium_events - direct_events)
+          extra = sorted(direct_events - selenium_events)
+          print(f"selenium={len(selenium_events)} direct={len(direct_events)}")
+          print(f"missing_from_direct={missing}")
+          print(f"extra_in_direct={extra}")
+          if missing or extra:
+              raise SystemExit('Direct endpoint result differs from Selenium')
           PY
 
       - name: Discover Freecal network traffic
@@ -59,6 +95,7 @@ jobs:
           name: freecal-live-diagnostics
           path: |
             freecal_live.json
+            freecal_direct.json
             freecal_network.json
           if-no-files-found: warn
           retention-days: 7
