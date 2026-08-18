@@ -1,0 +1,61 @@
+name: freecal-live-validation
+
+on:
+  push:
+    branches:
+      - agent/refine-freecal-scraper
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m pytest -q
+
+      - name: Live fetch mem230522 August 2026
+        run: |
+          python freecal_cli.py 230522 --month 2026-08 --pretty | tee freecal_live.json
+          python - <<'PY'
+          import json
+          with open('freecal_live.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print(f"event_count={data['event_count']}")
+          if data['event_count'] < 27:
+              raise SystemExit('Unexpectedly low event count')
+          PY
+
+      - name: Discover Freecal network traffic
+        run: |
+          python scripts/discover_freecal_network.py 230522 --month 2026-08 --pretty > freecal_network.json
+          python - <<'PY'
+          import json
+          with open('freecal_network.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print(f"request_count={data['request_count']}")
+          print(f"interesting_count={data['interesting_count']}")
+          for req in data['requests']:
+              print(req.get('method'), req.get('resource_type'), req.get('status'), req.get('url'))
+          PY
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freecal-live-diagnostics
+          path: |
+            freecal_live.json
+            freecal_network.json
+          if-no-files-found: warn
+          retention-days: 7
