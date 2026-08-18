@@ -85,7 +85,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-HTTPとSeleniumの実データ比較は、GitHub Actionsの `freecal-live-validation` で確認できます。
+HTTPとSeleniumの実データ比較は、GitHub Actionsの `freecal-live-validation` を手動実行して確認できます。
 
 ## ファイル構成
 
