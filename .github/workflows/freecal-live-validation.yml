@@ -27,65 +27,71 @@ jobs:
       - name: Run unit tests
         run: python -m pytest -q
 
-      - name: Live fetch mem230522 August 2026 with Selenium
+      - name: Live fetch with HTTP backend
         run: |
-          python freecal_cli.py 230522 --month 2026-08 --pretty | tee freecal_live.json
+          python freecal_cli.py 230522 --month 2026-08 --backend http --pretty | tee freecal_http.json
           python - <<'PY'
           import json
-          with open('freecal_live.json', encoding='utf-8') as f:
+          with open('freecal_http.json', encoding='utf-8') as f:
               data = json.load(f)
-          print(f"selenium_event_count={data['event_count']}")
-          if data['event_count'] < 27:
-              raise SystemExit('Unexpectedly low Selenium event count')
+          print(f"http_backend={data['backend']} event_count={data['event_count']}")
+          if data['backend'] != 'http' or data['event_count'] != 30:
+              raise SystemExit('HTTP backend did not return the validated 30 events')
           PY
 
-      - name: Fetch the same month directly from open/data
+      - name: Live fetch with Selenium backend
         run: |
-          python scripts/probe_freecal_direct.py 230522 --month 2026-08 --pretty | tee freecal_direct.json
+          python freecal_cli.py 230522 --month 2026-08 --backend selenium --pretty | tee freecal_selenium.json
           python - <<'PY'
           import json
-          with open('freecal_direct.json', encoding='utf-8') as f:
+          with open('freecal_selenium.json', encoding='utf-8') as f:
               data = json.load(f)
-          print(f"direct_event_count={data['event_count']}")
+          print(f"selenium_backend={data['backend']} event_count={data['event_count']}")
+          if data['backend'] != 'selenium' or data['event_count'] != 30:
+              raise SystemExit('Selenium backend did not return the validated 30 events')
           PY
 
-      - name: Compare direct and Selenium results
+      - name: Compare HTTP and Selenium results
         run: |
           python - <<'PY'
           import json
 
-          with open('freecal_live.json', encoding='utf-8') as f:
+          with open('freecal_http.json', encoding='utf-8') as f:
+              http_data = json.load(f)
+          with open('freecal_selenium.json', encoding='utf-8') as f:
               selenium_data = json.load(f)
-          with open('freecal_direct.json', encoding='utf-8') as f:
-              direct_data = json.load(f)
 
+          def canonical_title(value):
+              return ''.join(value.split())
+
+          http_events = {
+              (e['date'], e.get('time'), canonical_title(e['title']))
+              for e in http_data['events']
+          }
           selenium_events = {
-              (e['date'], e.get('time'), e['title']) for e in selenium_data['events']
-          }
-          direct_events = {
-              (e['date'], e.get('time'), e['title']) for e in direct_data['events']
+              (e['date'], e.get('time'), canonical_title(e['title']))
+              for e in selenium_data['events']
           }
 
-          missing = sorted(selenium_events - direct_events)
-          extra = sorted(direct_events - selenium_events)
-          print(f"selenium={len(selenium_events)} direct={len(direct_events)}")
-          print(f"missing_from_direct={missing}")
-          print(f"extra_in_direct={extra}")
+          missing = sorted(selenium_events - http_events)
+          extra = sorted(http_events - selenium_events)
+          print(f"http={len(http_events)} selenium={len(selenium_events)}")
+          print(f"missing_from_http={missing}")
+          print(f"extra_in_http={extra}")
           if missing or extra:
-              raise SystemExit('Direct endpoint result differs from Selenium')
+              raise SystemExit('HTTP and Selenium event sets differ')
           PY
 
-      - name: Discover Freecal network traffic
+      - name: Verify auto backend selects HTTP
         run: |
-          python scripts/discover_freecal_network.py 230522 --month 2026-08 --pretty > freecal_network.json
+          python freecal_cli.py 230522 --month 2026-08 --pretty > freecal_auto.json
           python - <<'PY'
           import json
-          with open('freecal_network.json', encoding='utf-8') as f:
+          with open('freecal_auto.json', encoding='utf-8') as f:
               data = json.load(f)
-          print(f"request_count={data['request_count']}")
-          print(f"interesting_count={data['interesting_count']}")
-          for req in data['requests']:
-              print(req.get('method'), req.get('resource_type'), req.get('status'), req.get('url'))
+          print(f"auto_selected={data['backend']}")
+          if data['backend'] != 'http':
+              raise SystemExit('Auto backend did not prefer HTTP')
           PY
 
       - name: Upload diagnostics
@@ -94,8 +100,8 @@ jobs:
         with:
           name: freecal-live-diagnostics
           path: |
-            freecal_live.json
-            freecal_direct.json
-            freecal_network.json
+            freecal_http.json
+            freecal_selenium.json
+            freecal_auto.json
           if-no-files-found: warn
           retention-days: 7
