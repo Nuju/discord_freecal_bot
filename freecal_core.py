@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Iterable, Optional
 
 from bs4 import BeautifulSoup
@@ -52,11 +52,14 @@ class FreecalResult:
     source_url: str
     fetched_at: datetime
     events: tuple[FreecalEvent, ...]
+    source_urls: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
+        source_urls = self.source_urls or (self.source_url,)
         return {
             "user_id": self.user_id,
             "source_url": self.source_url,
+            "source_urls": list(source_urls),
             "fetched_at": self.fetched_at.isoformat(timespec="seconds"),
             "event_count": len(self.events),
             "events": [event.to_dict() for event in self.events],
@@ -91,6 +94,26 @@ def build_public_url(
     return f"{FREECAL_BASE_URL}/mem{user_id}_date{int(year):04d}{int(month):02d}"
 
 
+def months_for_range(start: date, end: date) -> list[tuple[int, int]]:
+    """Return every calendar month touched by the half-open range [start, end)."""
+    if start >= end:
+        raise ValueError("start must be earlier than end")
+
+    current = date(start.year, start.month, 1)
+    final_day = end - timedelta(days=1)
+    final_month = date(final_day.year, final_day.month, 1)
+    months: list[tuple[int, int]] = []
+
+    while current <= final_month:
+        months.append((current.year, current.month))
+        if current.month == 12:
+            current = date(current.year + 1, 1, 1)
+        else:
+            current = date(current.year, current.month + 1, 1)
+
+    return months
+
+
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
 
@@ -110,8 +133,8 @@ def split_event_text(text: str) -> list[tuple[Optional[str], str]]:
     """Split one Freecal day-cell string into individual events.
 
     Freecal can render multiple events for the same day inside one ccexp node,
-    for example ``13:00 A 21:00 B`` or ``休 21:00 C``.  The old parser treated
-    those as one event.  This function keeps an untimed prefix as an all-day
+    for example ``13:00 A 21:00 B`` or ``休 21:00 C``. The old parser treated
+    those as one event. This function keeps an untimed prefix as an all-day
     event and starts a new event at every supported HH:MM token.
     """
     text = _normalize_text(text)
@@ -137,8 +160,6 @@ def split_event_text(text: str) -> list[tuple[Optional[str], str]]:
         if title:
             parts.append((match.group("time"), title))
 
-    # If a malformed time token consumed the whole text, preserve the source
-    # instead of silently dropping the event.
     return parts or [(None, text)]
 
 
@@ -306,6 +327,22 @@ class FreecalScraper:
 
         raise FreecalLoadError(f"Failed to load Freecal page: {url}") from last_error
 
+    def _fetch_month_events(
+        self,
+        user_id: str,
+        year: int,
+        month: int,
+    ) -> tuple[str, list[FreecalEvent]]:
+        url = build_public_url(user_id, year=year, month=month)
+        html = self._load_rendered_html(url, year=year, month=month)
+        events = parse_events(html, expected_user_id=user_id)
+        events = [
+            event
+            for event in events
+            if event.date.year == year and event.date.month == month
+        ]
+        return url, events
+
     def fetch(
         self,
         user_id: str,
@@ -316,23 +353,55 @@ class FreecalScraper:
         end: Optional[date] = None,
     ) -> FreecalResult:
         normalized = normalize_user_id(user_id)
-        url = build_public_url(normalized, year=year, month=month)
-        html = self._load_rendered_html(url, year=year, month=month)
-        events = parse_events(html, expected_user_id=normalized)
+
+        if start is not None and end is not None and start >= end:
+            raise ValueError("start must be earlier than end")
+
+        if (year is None) != (month is None):
+            raise ValueError("year and month must be specified together")
+
+        source_urls: list[str] = []
+        events: list[FreecalEvent] = []
 
         if year is not None and month is not None:
-            events = [
-                event
-                for event in events
-                if event.date.year == year and event.date.month == month
-            ]
+            url, events = self._fetch_month_events(normalized, year, month)
+            source_urls.append(url)
+        elif start is not None or end is not None:
+            if start is None or end is None:
+                raise ValueError(
+                    "start and end must be specified together when month is omitted"
+                )
+            for range_year, range_month in months_for_range(start, end):
+                url, month_events = self._fetch_month_events(
+                    normalized,
+                    range_year,
+                    range_month,
+                )
+                source_urls.append(url)
+                events.extend(month_events)
+        else:
+            url = build_public_url(normalized)
+            html = self._load_rendered_html(url, year=None, month=None)
+            source_urls.append(url)
+            events = parse_events(html, expected_user_id=normalized)
+
         events = filter_events(events, start=start, end=end)
+        unique_events = sorted(
+            set(events),
+            key=lambda event: (event.date, event.time or "00:00", event.title),
+        )
+
+        if len(source_urls) == 1:
+            source_url = source_urls[0]
+        else:
+            source_url = build_public_url(normalized)
 
         return FreecalResult(
             user_id=normalized,
-            source_url=url,
+            source_url=source_url,
+            source_urls=tuple(source_urls),
             fetched_at=datetime.now().astimezone(),
-            events=tuple(events),
+            events=tuple(unique_events),
         )
 
     def close(self) -> None:
