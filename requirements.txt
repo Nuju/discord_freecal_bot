@@ -4,7 +4,10 @@
 # Discord BOT フレームワーク
 discord.py>=2.3.0
 
-# Webスクレイピング
+# 軽量HTTP取得（通常経路）
+requests>=2.31.0
+
+# ブラウザ取得（HTTP失敗時のフォールバック / 既存BOT互換）
 selenium>=4.10.0
 webdriver-manager>=4.0.0
 beautifulsoup4>=4.12.0

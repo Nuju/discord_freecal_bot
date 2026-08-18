@@ -1,25 +1,33 @@
-# フリカレ監視BOT
+# フリカレ監視BOT / Freecal Reader
 
-フリーカレンダー（フリカレ）の公開スケジュールを取得し、Discord通知やChatGPTでの予定整理に利用するプロジェクトです。
+フリカレ（freecalend.com）の**公開カレンダー**を取得し、Discord通知やChatGPT/Codexでの予定整理に利用するプロジェクトです。
 
-## 新しい取得コア
+## 取得方式
 
-従来のDiscord BOT内に直接組み込まれていた取得処理を、再利用可能な `freecal_core.py` として分離しています。
+通常は、フリカレ自身の公開ページが利用している `/open/data` へHTTPでアクセスします。
 
-主な改善点:
+```text
+FreecalClient (auto)
+├─ 1. HTTP直接取得       ← 通常はこちら
+└─ 2. Selenium/Chrome    ← HTTP失敗時のフォールバック
+```
 
-- Discord表示処理とWeb取得処理を分離
-- 固定3秒待機ではなく、ページ読込とDOM安定を確認して待機
-- ChromeDriverはSelenium Managerに任せ、新コアでは `webdriver-manager` を不要化
+`mem230522` の2026年8月を使った実環境検証では、HTTP・Seleniumの両方が30件を取得し、空白だけの表示差を除いて予定内容が一致しました。
+
+### 主な特徴
+
+- Chromeを起動しない軽量なHTTP取得を標準経路に採用
+- HTTP取得に失敗した場合は従来のSelenium方式へ自動切替
 - `230522` / `mem230522` / 公開URLを同じ入力として扱える
-- `_dateYYYYMM` の月指定URLへ直接アクセス
-- 日付・時刻・予定名を構造化データとして返す
-- 月指定、開始日・終了日指定に対応
-- 重複予定を除去
-- JSON CLIを用意
-- ChatGPT Skill用の `skills/freecal/SKILL.md` を追加
+- `_dateYYYYMM` の月指定URLに対応
+- 月指定・期間指定・複数月の取得に対応
+- 同じ日に複数予定がある場合も別イベントとして解析
+- 日付・時刻・予定名をJSONで返却
+- Codexが自動検出する `.agents/skills/freecal/SKILL.md` を同梱
 
-### JSONで予定を取得
+## JSONで予定を取得
+
+通常は `auto` のままで構いません。
 
 ```bash
 python freecal_cli.py 230522 --month 2026-08 --pretty
@@ -36,11 +44,21 @@ python freecal_cli.py https://freecalend.com/open/mem230522 --month 2026-08 --pr
 ```bash
 python freecal_cli.py 230522 \
   --start 2026-08-17 \
-  --end 2026-09-01 \
+  --end 2026-09-02 \
   --pretty
 ```
 
-出力例:
+取得方式を明示する場合:
+
+```bash
+# HTTPのみ
+python freecal_cli.py 230522 --month 2026-08 --backend http --pretty
+
+# Seleniumのみ
+python freecal_cli.py 230522 --month 2026-08 --backend selenium --pretty
+```
+
+出力には、実際に使われた取得方式が `backend` として含まれます。
 
 ```json
 {
@@ -55,31 +73,69 @@ python freecal_cli.py 230522 \
       "user_id": "230522",
       "all_day": false
     }
-  ]
+  ],
+  "backend": "http"
 }
 ```
 
-### テスト
+## テスト
 
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
+HTTPとSeleniumの実データ比較は、GitHub Actionsの `freecal-live-validation` を手動実行して確認できます。
+
+## ファイル構成
+
+```text
+freecal_bot/
+├── .agents/
+│   └── skills/
+│       └── freecal/
+│           └── SKILL.md         # Codex repo skill
+├── bot.py                       # 既存Discord BOT
+├── freecal_core.py              # 共通モデル・解析 + Selenium取得
+├── freecal_http.py              # 軽量HTTP取得
+├── freecal_client.py            # auto/http/selenium の切替
+├── freecal_cli.py               # JSON CLI
+├── config.py                    # Discord設定
+├── requirements.txt             # 実行依存ライブラリ
+├── requirements-dev.txt         # テスト依存ライブラリ
+├── tests/
+│   ├── test_freecal_core.py
+│   └── test_freecal_http.py
+└── scripts/                     # 検証・診断ツール
+```
+
+## ChatGPT / Codex Skill
+
+`.agents/skills/freecal/SKILL.md` は、公開フリカレに対して次の処理を行うワークフローを定義しています。
+
+- 月間予定を表にする
+- 指定期間の予定を抽出する
+- 同じ日の複数予定を分けて表示する
+- 公開予定がない日を確認する
+- 複数人の公開予定を比較する
+
+予定が公開されていない日は、本人が必ず空いている日とは扱いません。
+
 ## Discord BOT
+
+Discord BOTは既存機能を維持しています。
 
 ### 必要な環境
 
 - Python 3.11以上
-- Google Chrome（最新版）
 - Discord BOTトークン
+- Google Chrome（既存BOTまたはSeleniumフォールバックを使用する場合）
 
 ### インストール
 
 ```bash
 git clone [repository_url]
 cd freecal_bot
-
 python -m venv venv
 
 # Windows
@@ -91,30 +147,13 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 設定
-
-`config.py` を編集します。
-
-```python
-DISCORD_BOT_TOKEN = "あなたのBOTトークン"
-```
-
-環境変数を使用する場合は `.env` を利用してください。
-
-### BOTの起動
+### BOT起動
 
 ```bash
 python bot.py
 ```
 
-### Discord上での初期設定
-
-```text
-!setchannel #通知チャンネル
-!adduser 123456 ユーザー名
-```
-
-## コマンド一覧
+主なコマンド:
 
 | コマンド | 説明 |
 |---|---|
@@ -126,64 +165,25 @@ python bot.py
 | `!removeuser` | ユーザー削除（管理者のみ） |
 | `!setchannel` | 通知チャンネル設定（管理者のみ） |
 
-## ファイル構成
-
-```text
-freecal_bot/
-├── bot.py                       # 既存Discord BOT
-├── freecal_core.py              # 再利用可能な取得・解析コア
-├── freecal_cli.py               # JSON CLI
-├── config.py                    # Discord設定
-├── requirements.txt             # 実行依存ライブラリ
-├── requirements-dev.txt         # テスト依存ライブラリ
-├── tests/
-│   └── test_freecal_core.py     # 解析・期間指定テスト
-├── skills/
-│   └── freecal/
-│       └── SKILL.md             # ChatGPT Skill
-├── users.json                   # ユーザー情報（自動生成）
-├── previous_data.json           # 前回データ（自動生成）
-└── screenshots/                 # 既存BOTのデバッグ画像
-```
-
-## ChatGPT Skill
-
-`skills/freecal/SKILL.md` は、公開フリカレを取得して次の処理を行うためのワークフローを定義しています。
-
-- 月間予定を表にする
-- 指定期間の予定を抽出する
-- 公開予定がない日を確認する
-- 複数人の公開予定を比較する
-
-予定が公開されていない日を、本人が必ず空いている日とは扱いません。
-
 ## トラブルシューティング
 
-### BOTまたはCLIが起動しない
+CLIの通常取得で問題が出た場合は、まずバックエンドを分けて確認します。
 
-- `python --version` を確認
-- Google Chromeが利用できることを確認
-- `pip install -r requirements.txt` を再実行
+```bash
+python freecal_cli.py 230522 --month 2026-08 --backend http --pretty
+python freecal_cli.py 230522 --month 2026-08 --backend selenium --pretty
+```
 
-### スケジュールが取得できない
-
-- 公開フリカレURLをブラウザで直接開けるか確認
-- ユーザーIDが正しいか確認
-- フリカレ側のDOM構造が変更されていないか確認
-- 既存Discord BOTでは `screenshots/` のデバッグ画像も確認
+- HTTPだけ失敗する場合: フリカレの内部データ取得仕様が変更された可能性があります。
+- Seleniumだけ失敗する場合: Chrome/Selenium環境を確認してください。
+- 両方失敗する場合: 公開URL、公開範囲、フリカレ側の障害を確認してください。
 
 ## セキュリティ
 
-- Discord BOTトークンをGitへコミットしない
-- 非公開カレンダーや認証が必要な情報の取得には使用しない
-- Skillでは公開URLまたは公開ユーザーIDのみを対象にする
-
-## 詳細ドキュメント
-
-- [利用ガイド](user_guide.md)
-- [管理者ガイド](admin_guide.md)
-- [開発ナレッジ](dev_knowledge.md)
+- 公開カレンダーのみを対象にします。
+- 非公開情報や認証が必要なカレンダーを迂回して取得しません。
+- Discord BOTトークンをGitへコミットしないでください。
 
 ---
 
-Version 8.0 development branch
+Version 8.x

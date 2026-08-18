@@ -1,0 +1,101 @@
+name: freecal-live-validation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m pytest -q
+
+      - name: Live fetch with HTTP backend
+        run: |
+          python freecal_cli.py 230522 --month 2026-08 --backend http --pretty | tee freecal_http.json
+          python - <<'PY'
+          import json
+          with open('freecal_http.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print(f"http_backend={data['backend']} event_count={data['event_count']}")
+          if data['backend'] != 'http' or data['event_count'] != 30:
+              raise SystemExit('HTTP backend did not return the validated 30 events')
+          PY
+
+      - name: Live fetch with Selenium backend
+        run: |
+          python freecal_cli.py 230522 --month 2026-08 --backend selenium --pretty | tee freecal_selenium.json
+          python - <<'PY'
+          import json
+          with open('freecal_selenium.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print(f"selenium_backend={data['backend']} event_count={data['event_count']}")
+          if data['backend'] != 'selenium' or data['event_count'] != 30:
+              raise SystemExit('Selenium backend did not return the validated 30 events')
+          PY
+
+      - name: Compare HTTP and Selenium results
+        run: |
+          python - <<'PY'
+          import json
+
+          with open('freecal_http.json', encoding='utf-8') as f:
+              http_data = json.load(f)
+          with open('freecal_selenium.json', encoding='utf-8') as f:
+              selenium_data = json.load(f)
+
+          def canonical_title(value):
+              return ''.join(value.split())
+
+          http_events = {
+              (e['date'], e.get('time'), canonical_title(e['title']))
+              for e in http_data['events']
+          }
+          selenium_events = {
+              (e['date'], e.get('time'), canonical_title(e['title']))
+              for e in selenium_data['events']
+          }
+
+          missing = sorted(selenium_events - http_events)
+          extra = sorted(http_events - selenium_events)
+          print(f"http={len(http_events)} selenium={len(selenium_events)}")
+          print(f"missing_from_http={missing}")
+          print(f"extra_in_http={extra}")
+          if missing or extra:
+              raise SystemExit('HTTP and Selenium event sets differ')
+          PY
+
+      - name: Verify auto backend selects HTTP
+        run: |
+          python freecal_cli.py 230522 --month 2026-08 --pretty > freecal_auto.json
+          python - <<'PY'
+          import json
+          with open('freecal_auto.json', encoding='utf-8') as f:
+              data = json.load(f)
+          print(f"auto_selected={data['backend']}")
+          if data['backend'] != 'http':
+              raise SystemExit('Auto backend did not prefer HTTP')
+          PY
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freecal-live-diagnostics
+          path: |
+            freecal_http.json
+            freecal_selenium.json
+            freecal_auto.json
+          if-no-files-found: warn
+          retention-days: 7
