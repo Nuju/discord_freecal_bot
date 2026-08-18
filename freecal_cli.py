@@ -4,7 +4,7 @@ import argparse
 import json
 from datetime import date
 
-from freecal_core import FreecalScraper
+from freecal_client import FreecalClient
 
 
 def parse_month(value: str) -> tuple[int, int]:
@@ -31,6 +31,12 @@ def main() -> int:
     parser.add_argument("--month", type=parse_month, help="Target month in YYYY-MM")
     parser.add_argument("--start", type=parse_date, help="Inclusive start date")
     parser.add_argument("--end", type=parse_date, help="Exclusive end date")
+    parser.add_argument(
+        "--backend",
+        choices=("auto", "http", "selenium"),
+        default="auto",
+        help="Retrieval backend. auto prefers HTTP and falls back to Selenium.",
+    )
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--pretty", action="store_true")
     args = parser.parse_args()
@@ -39,18 +45,20 @@ def main() -> int:
     if args.month:
         year, month = args.month
 
-    with FreecalScraper(timeout=args.timeout) as scraper:
-        result = scraper.fetch(
+    with FreecalClient(backend=args.backend, timeout=args.timeout) as client:
+        result = client.fetch(
             args.user,
             year=year,
             month=month,
             start=args.start,
             end=args.end,
         )
+        output = result.to_dict()
+        output["backend"] = client.last_backend
 
     print(
         json.dumps(
-            result.to_dict(),
+            output,
             ensure_ascii=False,
             indent=2 if args.pretty else None,
         )
