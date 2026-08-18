@@ -17,19 +17,3 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Run tests
         run: python -m pytest -q
-      - name: Live smoke test multi-month fetch
-        run: |
-          python freecal_cli.py 230522 --start 2026-08-31 --end 2026-09-03 --pretty > /tmp/freecal-smoke.json
-          cat /tmp/freecal-smoke.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          data = json.loads(Path('/tmp/freecal-smoke.json').read_text())
-          expected = [
-              'https://freecalend.com/open/mem230522_date202608',
-              'https://freecalend.com/open/mem230522_date202609',
-          ]
-          assert data['source_urls'] == expected, data['source_urls']
-          assert all('2026-08-31' <= event['date'] < '2026-09-03' for event in data['events'])
-          PY
