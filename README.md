@@ -63,7 +63,7 @@ python freecal_cli.py 230522 \
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q
+python -m pytest -q
 ```
 
 ## Discord BOT
