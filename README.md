@@ -23,7 +23,7 @@ FreecalClient (auto)
 - 月指定・期間指定・複数月の取得に対応
 - 同じ日に複数予定がある場合も別イベントとして解析
 - 日付・時刻・予定名をJSONで返却
-- ChatGPT/Codex Skill用 `skills/freecal/SKILL.md` を同梱
+- Codexが自動検出する `.agents/skills/freecal/SKILL.md` を同梱
 
 ## JSONで予定を取得
 
@@ -85,12 +85,16 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-HTTPとSeleniumの実データ比較は、GitHub Actionsの `freecal-live-validation` を手動実行して確認できます。
+HTTPとSeleniumの実データ比較は、GitHub Actionsの `freecal-live-validation` で確認できます。
 
 ## ファイル構成
 
 ```text
 freecal_bot/
+├── .agents/
+│   └── skills/
+│       └── freecal/
+│           └── SKILL.md         # Codex repo skill
 ├── bot.py                       # 既存Discord BOT
 ├── freecal_core.py              # 共通モデル・解析 + Selenium取得
 ├── freecal_http.py              # 軽量HTTP取得
@@ -102,15 +106,12 @@ freecal_bot/
 ├── tests/
 │   ├── test_freecal_core.py
 │   └── test_freecal_http.py
-├── skills/
-│   └── freecal/
-│       └── SKILL.md             # ChatGPT/Codex Skill
 └── scripts/                     # 検証・診断ツール
 ```
 
 ## ChatGPT / Codex Skill
 
-`skills/freecal/SKILL.md` は、公開フリカレに対して次の処理を行うワークフローを定義しています。
+`.agents/skills/freecal/SKILL.md` は、公開フリカレに対して次の処理を行うワークフローを定義しています。
 
 - 月間予定を表にする
 - 指定期間の予定を抽出する
