@@ -3,10 +3,16 @@ from __future__ import annotations
 import argparse
 import calendar
 import json
+import sys
 import urllib.parse
 from datetime import date
+from pathlib import Path
 
 import requests
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from freecal_core import build_public_url, normalize_user_id, split_event_text
 
@@ -24,11 +30,6 @@ def parse_month(value: str) -> tuple[int, int]:
     if not 1 <= month <= 12:
         raise argparse.ArgumentTypeError("month must be YYYY-MM")
     return year, month
-
-
-def make_key(key: str, *, calendar_permission: bool = False) -> list:
-    permissions = [["ok-230522-all-r-cald", True]] if calendar_permission else []
-    return [key, INITIAL_VERSION, INITIAL_VERSION, permissions, []]
 
 
 def build_keys(user_id: str, year: int, month: int) -> dict:
