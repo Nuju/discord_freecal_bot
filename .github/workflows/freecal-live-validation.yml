@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/refine-freecal-scraper
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
