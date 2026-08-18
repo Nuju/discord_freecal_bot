@@ -261,7 +261,6 @@ class FreecalHttpClient:
             source_urls=tuple(source_urls),
             fetched_at=datetime.now().astimezone(),
             events=tuple(unique_events),
-            backend="http",
         )
 
     def close(self) -> None:
